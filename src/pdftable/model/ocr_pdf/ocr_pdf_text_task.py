@@ -99,35 +99,36 @@ class OcrPdfTextTask(object):
             "vertical": [],
         }
 
-        for index, table in enumerate(ocr_system_output.table_cell_result):
-            table_bbox = table["bbox"]
-            # bbox 是 lt,rb 而 pdf 上的box 是lb,rt
-            table_bbox_new = [table_bbox[0], table_bbox[3], table_bbox[2], table_bbox[1]]
-            bbox = MathUtils.scale_image_bbox(bbox=table_bbox_new, factors=self.pdf_scalers)
+        if ocr_system_output.table_cell_result:
+            for index, table in enumerate(ocr_system_output.table_cell_result):
+                table_bbox = table["bbox"]
+                # bbox 是 lt,rb 而 pdf 上的box 是lb,rt
+                table_bbox_new = [table_bbox[0], table_bbox[3], table_bbox[2], table_bbox[1]]
+                bbox = MathUtils.scale_image_bbox(bbox=table_bbox_new, factors=self.pdf_scalers)
 
-            match, match_image, remain_images = TableProcessUtils.check_table_match_images(bbox,
-                                                                                           images=images)
-            if match:
-                # if match_image.name not in [item.name for item in add_images]:
-                #     add_images.append(match_image)
-                table["is_image"] = True
-                logger.info(f"当前table是误识别：{index} - {table} - 匹配到图片：{match_image.name}")
-                continue
+                match, match_image, remain_images = TableProcessUtils.check_table_match_images(bbox,
+                                                                                               images=images)
+                if match:
+                    # if match_image.name not in [item.name for item in add_images]:
+                    #     add_images.append(match_image)
+                    table["is_image"] = True
+                    logger.info(f"当前table是误识别：{index} - {table} - 匹配到图片：{match_image.name}")
+                    continue
 
-            image_table_cells = deepcopy(table["table_cells"])
-            table_cells = self.convert_table_cell_to_pdf(image_table_cells)
+                image_table_cells = deepcopy(table["table_cells"])
+                table_cells = self.convert_table_cell_to_pdf(image_table_cells)
 
-            text_cells, remain_text_bbox = PdfUtils.get_pdf_text_in_bbox(bbox=bbox,
-                                                                         horizontal_text=remain_text_bbox["horizontal"],
-                                                                         vertical_text=remain_text_bbox["vertical"])
-            # text box 拆分: 将一行文本box 跨多个cell的拆分
-            if "not_spit_text" in table:
-                new_text_cells = text_cells
-            else:
-                new_text_cells = TableProcessUtils.text_box_split_to_cell(table_cells=table_cells,
-                                                                          text_cells=text_cells)
-            result_text_cells["horizontal"].extend(new_text_cells["horizontal"])
-            result_text_cells["vertical"].extend(new_text_cells["vertical"])
+                text_cells, remain_text_bbox = PdfUtils.get_pdf_text_in_bbox(bbox=bbox,
+                                                                             horizontal_text=remain_text_bbox["horizontal"],
+                                                                             vertical_text=remain_text_bbox["vertical"])
+                # text box 拆分: 将一行文本box 跨多个cell的拆分
+                if "not_spit_text" in table:
+                    new_text_cells = text_cells
+                else:
+                    new_text_cells = TableProcessUtils.text_box_split_to_cell(table_cells=table_cells,
+                                                                              text_cells=text_cells)
+                result_text_cells["horizontal"].extend(new_text_cells["horizontal"])
+                result_text_cells["vertical"].extend(new_text_cells["vertical"])
 
         # remain_image
         result_text_cells["horizontal"].extend(images)

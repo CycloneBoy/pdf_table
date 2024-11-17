@@ -5,6 +5,7 @@
 # @Author   : sl
 # @Date     : 2024/11/17 - 13:03
 import os
+import traceback
 from typing import List
 
 from transformers import HfArgumentParser
@@ -132,11 +133,15 @@ class PdfTableCli(object):
                     logger.info(f"图片型PDF没有提取出图片,采用PDF提取：{run_page_file}")
 
             logger.info(f"开始提取：{index} - {page} - {run_page_file} ")
-            outputs, metric = ocr_document(run_page_file, src_id=src_id, page=page)
+            try:
+                outputs, metric = ocr_document(run_page_file, src_id=src_id, page=page)
 
-            run_save_file_name.append(run_page_file)
-            run_metric.append(metric)
-            all_run_result.append(outputs)
+                run_save_file_name.append(run_page_file)
+                run_metric.append(metric)
+                all_run_result.append(outputs)
+            except Exception as e:
+                traceback.print_exc()
+                logger.error(f"提取出错 {index} - {page} - {run_page_file} ：{e}")
 
         # 输出全部页面
         html_result = self.make_pdf_output_html(save_file_name=run_save_file_name,

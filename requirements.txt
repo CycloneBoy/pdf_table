@@ -1,8 +1,6 @@
+scipy
 numpy
-pandas
 opencv-python
-pymysql
-SQLAlchemy
 tqdm
 typer
 rich
@@ -13,18 +11,16 @@ rich
 pdfminer.six
 PyMuPDF
 pypdf
-fitz
 
 requests
 beautifulsoup4
 
-torch
+#torch
 transformers
 pydantic
-onnxconverter_common
-onnx
-onnxruntime-gpu
-opencv_python
+onnxconverter_common==1.14.0
+onnx==1.17.0
+onnxruntime-gpu==1.19.2
 openpyxl
 addict
 yapf
@@ -34,3 +30,10 @@ apted
 tablepyxl
 attr
 wandb
+packaging
+cryptography
+python-dotenv
+shapely
+pyclipper
+pytz
+pandas

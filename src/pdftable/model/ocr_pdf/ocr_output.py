@@ -4,10 +4,10 @@
 # @File    ：ocr_output
 # @Author  ：cycloneboy
 # @Date    ：20xx/7/24 17:34
+from dataclasses import dataclass
 from typing import List, Union, Dict
 
 import numpy as np
-from attr import dataclass
 from transformers.utils import ModelOutput
 
 from pdftable.entity.table_entity import OcrCell

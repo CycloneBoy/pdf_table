@@ -10,7 +10,7 @@ import zipfile
 from typing import List
 
 import numpy as np
-import pandas as pd
+
 
 # minimum number of vertical textline intersections for a textedge
 # to be considered valid
@@ -760,6 +760,7 @@ class Table(object):
             Output filepath.
 
         """
+        import pandas as pd
         kw = {
             "sheet_name": f"page-{self.page}-table-{self.order}",
             "encoding": "utf-8",
@@ -890,6 +891,7 @@ class TableList(object):
             Whether or not to add files to a ZIP archive.
 
         """
+        import pandas as pd
         dirname = os.path.dirname(path)
         basename = os.path.basename(path)
         root, ext = os.path.splitext(basename)
