@@ -1,0 +1,29 @@
+numpy
+pandas
+opencv-python
+pymysql
+SQLAlchemy
+tqdm
+typer
+rich
+
+########################################
+#  pdf tool
+########################################
+pdfminer.six
+PyMuPDF
+pypdf
+
+requests
+beautifulsoup4
+
+torch
+transformers
+pydantic
+onnxconverter_common
+addict
+yapf
+
+# modelscope
+apted
+tablepyxl

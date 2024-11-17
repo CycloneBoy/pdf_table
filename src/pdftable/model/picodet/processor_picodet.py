@@ -1,0 +1,360 @@
+#!/usr/bin/env python
+# -*- coding: UTF-8 -*-
+# @Project ：PdfTable 
+# @File    ：processor_picodet
+# @Author  ：cycloneboy
+# @Date    ：20xx/7/18 14:08
+import os
+from typing import Dict, Any
+
+import PIL
+import cv2
+import math
+import numpy as np
+from scipy.special import softmax
+
+import requests
+import torch
+from PIL import Image
+
+from .configuration_picodet import PicodetConfig
+from ...utils import logger
+
+"""
+ocr picodet Preprocessor
+"""
+
+__all__ = [
+    "OCRPicodetPreProcessor",
+    "OCRPicodetPostProcessor",
+]
+
+
+class OCRPicodetPreProcessor(object):
+
+    def __init__(self, config: PicodetConfig):
+        """The base constructor for all ocr layout preprocessors.
+
+        """
+        super().__init__()
+        self.config = config
+
+        shape = (3, 1, 1) if config.order == 'chw' else (1, 1, 3)
+        self.mean = np.array(config.norm_mean).reshape(shape).astype('float32')
+        self.std = np.array(config.norm_std).reshape(shape).astype('float32')
+        self.scale = np.float32(config.scale if config.scale is not None else 1.0 / 255.0)
+
+    def read_image(self, image_path_or_url):
+        image_content = image_path_or_url
+        if image_path_or_url.startswith("http"):
+            image_content = requests.get(image_path_or_url, stream=True).raw
+        image = Image.open(image_content)
+        image = image.convert("RGB")
+
+        return image
+
+    def resize(self, img):
+        resize_h, resize_w = self.config.img_height, self.config.img_width
+        ori_h, ori_w = img.shape[:2]  # (h, w, c)
+        ratio_h = float(resize_h) / ori_h
+        ratio_w = float(resize_w) / ori_w
+
+        resized_img = cv2.resize(img, (int(resize_w), int(resize_h)))
+
+        return resized_img, [ratio_h, ratio_w]
+
+    def normalize(self, img):
+        if isinstance(img, Image.Image):
+            img = np.array(img)
+        normal_img = (img.astype('float32') * self.scale - self.mean) / self.std
+        return normal_img
+
+    def __call__(self, inputs):
+        """process the raw input data
+        Args:
+            inputs:
+                - A string containing an HTTP link pointing to an image
+                - A string containing a local path to an image
+                - An image loaded in PIL(PIL.Image.Image) or opencv(np.ndarray) directly, 3 channels RGB
+        Returns:
+            outputs: the preprocessed image
+        """
+
+        if isinstance(inputs, str):
+            img = np.array(self.read_image(inputs))
+        elif isinstance(inputs, PIL.Image.Image):
+            img = np.array(inputs)
+        elif isinstance(inputs, np.ndarray):
+            img = inputs
+        else:
+            raise TypeError(
+                f'inputs should be either str, PIL.Image, np.array, but got {type(inputs)}'
+            )
+
+        img = img[:, :, ::-1]
+        height, width, _ = img.shape
+
+        resized_img, scale_factor = self.resize(img)
+
+        resized_img = self.normalize(resized_img)
+        # convert hwc image to chw image
+        resized_img = torch.from_numpy(resized_img).permute(2, 0, 1).float()
+
+        _, new_height, new_width = resized_img.shape
+        result = {
+            'image_file': inputs if isinstance(inputs, str) else "",
+            'image': resized_img,
+            'org_shape': [height, width],
+            'scale_factor': scale_factor,
+            'target_shape': [new_height, new_width],
+        }
+
+        logger.info(f"image: {height} x {width}  -> {new_height} x {new_width} ")
+        return result
+
+
+class OCRPicodetPostProcessor(object):
+
+    def __init__(self, config: PicodetConfig):
+        """The base constructor for all ocr layout preprocessors.
+
+        """
+        super().__init__()
+        self.config = config
+        # self.labels = self.load_layout_dict(os.path.join(config.model_path, config.label_file))
+        self.strides = config.strides
+        self.score_threshold = config.score_threshold
+        self.nms_threshold = config.nms_threshold
+        self.nms_top_k = config.nms_top_k
+        self.keep_top_k = config.keep_top_k
+
+    def load_layout_dict(self, layout_dict_path):
+        with open(layout_dict_path, 'r', encoding='utf-8') as fp:
+            labels = fp.readlines()
+        return [label.strip('\n') for label in labels]
+
+    def warp_boxes(self, boxes, ori_shape):
+        """Apply transform to boxes
+        """
+        width, height = ori_shape[1], ori_shape[0]
+        n = len(boxes)
+        if n:
+            # warp points
+            xy = np.ones((n * 4, 3))
+            xy[:, :2] = boxes[:, [0, 1, 2, 3, 0, 3, 2, 1]].reshape(
+                n * 4, 2)  # x1y1, x2y2, x1y2, x2y1
+            # xy = xy @ M.T  # transform
+            xy = (xy[:, :2] / xy[:, 2:3]).reshape(n, 8)  # rescale
+            # create new boxes
+            x = xy[:, [0, 2, 4, 6]]
+            y = xy[:, [1, 3, 5, 7]]
+            xy = np.concatenate(
+                (x.min(1), y.min(1), x.max(1), y.max(1))).reshape(4, n).T
+            # clip boxes
+            xy[:, [0, 2]] = xy[:, [0, 2]].clip(0, width)
+            xy[:, [1, 3]] = xy[:, [1, 3]].clip(0, height)
+            return xy.astype(np.float32)
+        else:
+            return boxes
+
+    def img_info(self, ori_img, img):
+        origin_shape = ori_img.shape
+        resize_shape = img.shape
+        im_scale_y = resize_shape[2] / float(origin_shape[0])
+        im_scale_x = resize_shape[3] / float(origin_shape[1])
+        scale_factor = np.array([im_scale_y, im_scale_x], dtype=np.float32)
+        img_shape = np.array(img.shape[2:], dtype=np.float32)
+
+        input_shape = np.array(img).astype('float32').shape[2:]
+        ori_shape = np.array((img_shape,)).astype('float32')
+        scale_factor = np.array((scale_factor,)).astype('float32')
+        return ori_shape, input_shape, scale_factor
+
+    def img_info_v2(self, preds):
+        origin_shape = preds["org_shape"]
+        scale_factor = preds["scale_factor"]
+
+        scale_factor = np.array(scale_factor, dtype=np.float32)
+        img_shape = np.array(origin_shape, dtype=np.float32)
+
+        ori_shape = np.array((img_shape,)).astype('float32')
+        scale_factor = np.array((scale_factor,)).astype('float32')
+        return ori_shape, scale_factor
+
+    def __call__(self, preds):
+        scores, raw_boxes = preds['boxes'], preds['boxes_num']
+        batch_size = raw_boxes[0].shape[0]
+        reg_max = int(raw_boxes[0].shape[-1] / 4 - 1)
+        out_boxes_num = []
+        out_boxes_list = []
+        results = []
+        # ori_shape, input_shape, scale_factor = self.img_info(ori_img, img)
+        ori_shape, scale_factor = self.img_info_v2(preds)
+        input_shape = preds["target_shape"]
+        # ori_shape = preds["org_shape"]
+        # input_shape = preds["org_shape"]
+        # scale_factor = preds["scale_factor"]
+
+        for batch_id in range(batch_size):
+            # generate centers
+            decode_boxes = []
+            select_scores = []
+            for stride, box_distribute, score in zip(self.strides, raw_boxes,
+                                                     scores):
+                box_distribute = box_distribute[batch_id]
+                score = score[batch_id]
+                # centers
+                fm_h = input_shape[0] / stride
+                fm_w = input_shape[1] / stride
+                h_range = np.arange(fm_h)
+                w_range = np.arange(fm_w)
+                ww, hh = np.meshgrid(w_range, h_range)
+                ct_row = (hh.flatten() + 0.5) * stride
+                ct_col = (ww.flatten() + 0.5) * stride
+                center = np.stack((ct_col, ct_row, ct_col, ct_row), axis=1)
+
+                # box distribution to distance
+                reg_range = np.arange(reg_max + 1)
+                box_distance = box_distribute.reshape((-1, reg_max + 1))
+                box_distance = softmax(box_distance, axis=1)
+                box_distance = box_distance * np.expand_dims(reg_range, axis=0)
+                box_distance = np.sum(box_distance, axis=1).reshape((-1, 4))
+                box_distance = box_distance * stride
+
+                # top K candidate
+                topk_idx = np.argsort(score.max(axis=1))[::-1]
+                topk_idx = topk_idx[:self.nms_top_k]
+                center = center[topk_idx]
+                score = score[topk_idx]
+                box_distance = box_distance[topk_idx]
+
+                # decode box
+                decode_box = center + [-1, -1, 1, 1] * box_distance
+
+                select_scores.append(score)
+                decode_boxes.append(decode_box)
+
+            # nms
+            bboxes = np.concatenate(decode_boxes, axis=0)
+            confidences = np.concatenate(select_scores, axis=0)
+            picked_box_probs = []
+            picked_labels = []
+            for class_index in range(0, confidences.shape[1]):
+                probs = confidences[:, class_index]
+                mask = probs > self.score_threshold
+                probs = probs[mask]
+                if probs.shape[0] == 0:
+                    continue
+                subset_boxes = bboxes[mask, :]
+                box_probs = np.concatenate(
+                    [subset_boxes, probs.reshape(-1, 1)], axis=1)
+                box_probs = hard_nms(
+                    box_probs,
+                    iou_threshold=self.nms_threshold,
+                    top_k=self.keep_top_k, )
+                picked_box_probs.append(box_probs)
+                picked_labels.extend([class_index] * box_probs.shape[0])
+
+            if len(picked_box_probs) == 0:
+                out_boxes_list.append(np.empty((0, 4)))
+                out_boxes_num.append(0)
+
+            else:
+                picked_box_probs = np.concatenate(picked_box_probs)
+
+                # resize output boxes
+                picked_box_probs[:, :4] = self.warp_boxes(
+                    picked_box_probs[:, :4], ori_shape[batch_id])
+                im_scale = np.concatenate([
+                    scale_factor[batch_id][::-1], scale_factor[batch_id][::-1]
+                ])
+                picked_box_probs[:, :4] /= im_scale
+                # clas score box
+                out_boxes_list.append(
+                    np.concatenate(
+                        [
+                            np.expand_dims(
+                                np.array(picked_labels),
+                                axis=-1), np.expand_dims(
+                            picked_box_probs[:, 4], axis=-1),
+                            picked_box_probs[:, :4]
+                        ],
+                        axis=1))
+                out_boxes_num.append(len(picked_labels))
+
+        out_boxes_list = np.concatenate(out_boxes_list, axis=0)
+        out_boxes_num = np.asarray(out_boxes_num).astype(np.int32)
+
+        for dt in out_boxes_list:
+            clsid, bbox, score = int(dt[0]), dt[2:], dt[1]
+            label = self.config.id2label[clsid]
+            result = {'bbox': bbox, 'label': label, 'score': score, 'category_id': clsid}
+            results.append(result)
+
+        results_dict = {
+            "bboxs": results,
+            "boxes_num": out_boxes_num
+        }
+        return results_dict
+
+
+def hard_nms(box_scores, iou_threshold, top_k=-1, candidate_size=200):
+    """
+    Args:
+        box_scores (N, 5): boxes in corner-form and probabilities.
+        iou_threshold: intersection over union threshold.
+        top_k: keep top_k results. If k <= 0, keep all the results.
+        candidate_size: only consider the candidates with the highest scores.
+    Returns:
+         picked: a list of indexes of the kept boxes
+    """
+    scores = box_scores[:, -1]
+    boxes = box_scores[:, :-1]
+    picked = []
+    indexes = np.argsort(scores)
+    indexes = indexes[-candidate_size:]
+    while len(indexes) > 0:
+        current = indexes[-1]
+        picked.append(current)
+        if 0 < top_k == len(picked) or len(indexes) == 1:
+            break
+        current_box = boxes[current, :]
+        indexes = indexes[:-1]
+        rest_boxes = boxes[indexes, :]
+        iou = iou_of(
+            rest_boxes,
+            np.expand_dims(
+                current_box, axis=0), )
+        indexes = indexes[iou <= iou_threshold]
+
+    return box_scores[picked, :]
+
+
+def iou_of(boxes0, boxes1, eps=1e-5):
+    """Return intersection-over-union (Jaccard index) of boxes.
+    Args:
+        boxes0 (N, 4): ground truth boxes.
+        boxes1 (N or 1, 4): predicted boxes.
+        eps: a small number to avoid 0 as denominator.
+    Returns:
+        iou (N): IoU values.
+    """
+    overlap_left_top = np.maximum(boxes0[..., :2], boxes1[..., :2])
+    overlap_right_bottom = np.minimum(boxes0[..., 2:], boxes1[..., 2:])
+
+    overlap_area = area_of(overlap_left_top, overlap_right_bottom)
+    area0 = area_of(boxes0[..., :2], boxes0[..., 2:])
+    area1 = area_of(boxes1[..., :2], boxes1[..., 2:])
+    return overlap_area / (area0 + area1 - overlap_area + eps)
+
+
+def area_of(left_top, right_bottom):
+    """Compute the areas of rectangles given two corners.
+    Args:
+        left_top (N, 2): left top corner.
+        right_bottom (N, 2): right bottom corner.
+    Returns:
+        area (N): return the area.
+    """
+    hw = np.clip(right_bottom - left_top, 0.0, None)
+    return hw[..., 0] * hw[..., 1]
