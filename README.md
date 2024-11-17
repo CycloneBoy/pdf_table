@@ -6,9 +6,8 @@
 apt install ghostscript
 
 # install pdftable
-pip install pdftable
+#pip install pdftable
 
-# or 
 python setup.py install
 ```
 
