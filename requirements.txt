@@ -13,6 +13,7 @@ rich
 pdfminer.six
 PyMuPDF
 pypdf
+fitz
 
 requests
 beautifulsoup4
@@ -21,9 +22,15 @@ torch
 transformers
 pydantic
 onnxconverter_common
+onnx
+onnxruntime-gpu
+opencv_python
+openpyxl
 addict
 yapf
 
 # modelscope
 apted
 tablepyxl
+attr
+wandb
