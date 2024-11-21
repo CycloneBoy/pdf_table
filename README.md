@@ -17,6 +17,10 @@ python setup.py install
 
 To download model from modelscope, please set the environment variable PDFTABLE_USE_MODELSCOPE_HUB to 1, otherwise huggingface will be used by default to download the model.
 
+### model
+I have uploaded the related model to the Hugging Face and Modelscope platform. When using the specified table identification model, the model weight will be downloaded to the local. The configuration file path of all models used in the project is (https://github.com/CycloneBoy/pdf_table/blob/main/src/pdftable/model/ocr_pdf/ocr_table_model_config.py), you can refer to.
+
+
 ### cli 
 ```text
 # pdftable --help
